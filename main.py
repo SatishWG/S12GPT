@@ -1,3 +1,4 @@
+import os
 import torch
 from myGPT import GPT, GPTConfig, DataLoaderLite
 import time
@@ -32,12 +33,33 @@ def train_gpt():
 
     # Training parameters
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
-    num_epochs = 50  # Increased from 5 to 10
+    num_epochs = 100  # total number of epochs
     best_loss = float('inf')
     start_time = time.time()
 
+    # resume from checkpoint if available
+    start_epoch = 0
+    ckpt_path = "final_gpt_model.pth"
+    if os.path.exists(ckpt_path):
+        print(f"Found checkpoint '{ckpt_path}', loading...")
+        ckpt = torch.load(ckpt_path, map_location=device)
+        # support both a raw state_dict and a full checkpoint dict
+        if isinstance(ckpt, dict) and 'model_state_dict' in ckpt:
+            model.load_state_dict(ckpt['model_state_dict'])
+            if 'optimizer_state_dict' in ckpt:
+                try:
+                    optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+                except Exception:
+                    print("Warning: failed to restore optimizer state (incompatible).")
+            start_epoch = ckpt.get('epoch', 0) + 1
+        else:
+            # assume ckpt is just a state_dict
+            model.load_state_dict(ckpt)
+            start_epoch = 0
+        print(f"Resuming training from epoch {start_epoch}")
+
     # Training loop
-    for epoch in range(num_epochs):
+    for epoch in range(start_epoch, num_epochs):
         model.train()  # Set model to training mode
         total_loss = 0
         num_batches = 0
