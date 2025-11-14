@@ -29,7 +29,7 @@ def train_gpt(restart: bool = False, ckpt_path: str = "final_gpt_model.pth", num
         n_embd=768
     )
 
-    model = GPT(GPTconfig())
+    model = GPT(GPTConfig())
     model.to(device)
 
     # Initialize data loader
