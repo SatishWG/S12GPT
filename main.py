@@ -1,9 +1,11 @@
 import os
+import math
 import torch
 from myGPT import GPT, GPTConfig, DataLoaderLite
 import time
+import argparse
 
-def train_gpt():
+def train_gpt(restart: bool = False, ckpt_path: str = "final_gpt_model.pth", num_epochs: int = 100):
     # Set device
     device = 'cpu'
     if torch.cuda.is_available():
@@ -31,16 +33,41 @@ def train_gpt():
     # Initialize data loader
     train_loader = DataLoaderLite(B=4, T=32)  # Batch size=4, Sequence length=32
 
+    # Learning rate schedule parameters
+    max_lr = 6e-3   # 0.006
+    min_lr = 3e-3   # 0.003
+    steps_per_epoch = 100  # matches the inner loop in training
+    total_steps = max(1, num_epochs * steps_per_epoch)
+    warmup_steps = max(1, int(total_steps * 0.03))  # 3% warmup (at least 1 step)
+
     # Training parameters
-    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
-    num_epochs = 100  # total number of epochs
+    optimizer = torch.optim.AdamW(model.parameters(), lr=max_lr)
+
+    # LambdaLR that implements: warmup from min_lr->max_lr then cosine anneal back to min_lr
+    min_over_max = min_lr / max_lr
+    def lr_lambda(step: int):
+        if step < warmup_steps:
+            # linear warmup of the multiplicative factor from min_over_max -> 1
+            progress = step / float(warmup_steps)
+            return min_over_max + (1.0 - min_over_max) * progress
+        else:
+            # cosine annealing from factor=1 down to min_over_max
+            denom = float(max(1, total_steps - warmup_steps))
+            progress = (step - warmup_steps) / denom
+            cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return min_over_max + (1.0 - min_over_max) * cosine_decay
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+    # set scheduler to step 0 to initialize the optimizer lr to min_lr before training updates
+    scheduler.step(0)
+
     best_loss = float('inf')
     start_time = time.time()
 
-    # resume from checkpoint if available
+    # resume from checkpoint if available (unless restart is requested)
     start_epoch = 0
-    ckpt_path = "final_gpt_model.pth"
-    if os.path.exists(ckpt_path):
+    if (not restart) and os.path.exists(ckpt_path):
         print(f"Found checkpoint '{ckpt_path}', loading...")
         ckpt = torch.load(ckpt_path, map_location=device)
         # support both a raw state_dict and a full checkpoint dict
@@ -57,8 +84,14 @@ def train_gpt():
             model.load_state_dict(ckpt)
             start_epoch = 0
         print(f"Resuming training from epoch {start_epoch}")
+    else:
+        if restart and os.path.exists(ckpt_path):
+            print(f"--restart specified, ignoring existing checkpoint '{ckpt_path}' and starting from scratch.")
+        else:
+            print("No checkpoint loaded, starting from scratch.")
 
     # Training loop
+    global_step = start_epoch * steps_per_epoch
     for epoch in range(start_epoch, num_epochs):
         model.train()  # Set model to training mode
         total_loss = 0
@@ -68,7 +101,7 @@ def train_gpt():
         print(f"\nEpoch {epoch+1}/{num_epochs}")
         print("-" * 20)
 
-        for i in range(100):  # Process 100 batches per epoch
+        for i in range(steps_per_epoch):  # Process steps_per_epoch batches per epoch
             x, y = train_loader.next_batch()
             x, y = x.to(device), y.to(device)
 
@@ -81,11 +114,16 @@ def train_gpt():
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # Add gradient clipping
             optimizer.step()
 
+            # advance scheduler (per optimization step)
+            global_step += 1
+            scheduler.step(global_step)
+
             total_loss += loss.item()
             num_batches += 1
 
             if i % 10 == 0:
-                print(f"Batch {i:3d}, Loss: {loss.item():.4f}")
+                current_lr = optimizer.param_groups[0]['lr']
+                print(f"Batch {i:3d}, Loss: {loss.item():.4f}, LR: {current_lr:.6f}")
 
         avg_loss = total_loss / num_batches
         epoch_time = time.time() - epoch_start_time
@@ -109,41 +147,18 @@ def train_gpt():
     print(f"Best loss achieved: {best_loss:.4f}")
     return model
 
-# def generate_text(model, prompt="Once upon a time", max_tokens=50):
-#     # STOP
-#     num_return_sequences = 5
-#     max_length = 30
-#     torch.manual_seed(42)
-#     torch.cuda.manual_seed(42)
-#     model.eval()
-#     while x.size(1) < max_length:
-#     # forward the model to get the logits
-#         with torch.no_grad():
-#             # TODO: Implement text generation using the trained model
-#             # This would require tokenizing the prompt and implementing the generation logic
-#             # pass
-#             logits = model(x)[0] # (B, T, vocab_size)
-#             # take the logits at the last position
-#             logits = logits[:, -1, :] # (B, vocab_size)
-#             # get the probabilities
-#             probs = F.softmax(logits, dim=-1)
-#             # do top-k sampling of 50 (huggingface pipeline default)
-#             # topk_probs here becomes (5, 50), topk_indices is (5, 50)
-#             topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
-#             # select a token from the top-k probabilities
-#             # note: multinomial does not demand the input to sum to 1
-#             ix = torch.multinomial(topk_probs, 1) # (B, 1)
-#             # gather the corresponding indices
-#             xcol = torch.gather(topk_indices, -1, ix) # (B, 1)
-#             # append to the sequence
-#             x = torch.cat((x, xcol), dim=1)
-
 def main():
+    parser = argparse.ArgumentParser(description="Train GPT model")
+    parser.add_argument("--restart", action="store_true", help="Restart training from scratch and ignore final_gpt_model.pth if present")
+    parser.add_argument("--ckpt", type=str, default="final_gpt_model.pth", help="Path to checkpoint file to resume from")
+    parser.add_argument("--epochs", "-e", type=int, default=1000, help="Number of epochs to train")
+    args = parser.parse_args()
+
     print("Starting GPT training...")
     try:
-        model = train_gpt()
-        torch.save(model.state_dict(), "final_gpt_model.pth")
-        print("Final model saved to final_gpt_model.pth")
+        model = train_gpt(restart=args.restart, ckpt_path=args.ckpt, num_epochs=args.epochs)
+        torch.save(model.state_dict(), args.ckpt)
+        print(f"Final model saved to {args.ckpt}")
         # generate_text(model, prompt="In a distant future", max_tokens=50)
         
     except KeyboardInterrupt:
