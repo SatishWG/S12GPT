@@ -4,6 +4,7 @@ import torch
 from myGPT import GPT, GPTConfig, DataLoaderLite
 import time
 import argparse
+import tiktoken
 
 def train_gpt(restart: bool = False, ckpt_path: str = "final_gpt_model.pth", num_epochs: int = 100):
     # Set device
@@ -27,7 +28,8 @@ def train_gpt(restart: bool = False, ckpt_path: str = "final_gpt_model.pth", num
         n_head=12,
         n_embd=768
     )
-    model = GPT(config)
+
+    model = GPT(GPTconfig())
     model.to(device)
 
     # Initialize data loader
