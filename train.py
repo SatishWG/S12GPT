@@ -301,9 +301,8 @@ while epoch < max_epochs:
     avg_loss = epoch_loss / epoch_batches
     best_loss = min(best_loss, avg_loss)
     
-    # Print progress
-    if (epoch + 1) % 10 == 0 or avg_loss < target_loss:
-        print(f"Epoch {epoch+1}/{max_epochs}, Loss: {avg_loss:.6f}, Best: {best_loss:.6f}, Steps: {step}")
+    # Print progress for every epoch
+    print(f"Epoch {epoch+1}/{max_epochs}, Loss: {avg_loss:.6f}, Best: {best_loss:.6f}, Steps: {step}")
     
     # Early stopping if target loss achieved
     if avg_loss < target_loss:

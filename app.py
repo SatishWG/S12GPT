@@ -115,4 +115,4 @@ with gr.Blocks() as app:
 
 # expose for Hugging Face Spaces
 if __name__ == "__main__":
-    app.launch(server_name="0.0.0.0", server_port=7860, share=
+    app.launch(server_name="0.0.0.0", server_port=7860, share=True)
