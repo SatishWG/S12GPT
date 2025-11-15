@@ -8,5 +8,6 @@ dependencies = [
 "dataclasses",
 "torch",
 "transformers",
-"tiktoken"
+"tiktoken",
+"gradio"
 ]
